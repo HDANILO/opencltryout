@@ -1,5 +1,4 @@
 #include <CL/cl.hpp>
-#include <new>
 
 static void check_error(cl_int error, char* name)
 {
@@ -190,17 +189,13 @@ int main(int argc, char* argv[])
 		printf("found 1 platform for opencl\n\n");
 
 	opencl_platform* platforms = (opencl_platform*)malloc(sizeof(opencl_platform)*num_platforms);
-	
-	char name[128];
-	char vendor[128];
-	char version[128];
-	char extensions[256];
 
 	for(int i = 0; i < num_platforms; i++)
 	{
 		platforms[i] = *new opencl_platform(platforms_id[i]);
 		platforms[i].printInfo();
 	}
+
 	system("PAUSE");
 
 	free(platforms);
