@@ -1,4 +1,7 @@
+#include <GL/glew.h>
 #include <CL/cl.hpp>
+#include <stdio.h>
+
 
 static void check_error(cl_int error, char* name)
 {
@@ -119,16 +122,16 @@ class opencl_platform
 
 	static cl_uint getPlatformNumber()
 	{
-		static cl_uint num_platforms = 0;
-		if (num_platforms == 0)
+		static cl_uint snum_platforms = 0;
+		if (snum_platforms == 0)
 		{
 			cl_int err_check;
-			err_check = clGetPlatformIDs(NULL,NULL,&num_platforms);
+			err_check = clGetPlatformIDs(NULL,NULL,&snum_platforms);
 			check_error(err_check,"clGetPlatformIDs get number of platforms");
-			return num_platforms;
+			return snum_platforms;
 		}
 		else
-			return num_platforms;
+			return snum_platforms;
 	}
 
 	static cl_platform_id* getAllPlatformId(cl_uint num_platforms)
@@ -173,6 +176,23 @@ class opencl_platform
 		}
 	}
 
+};
+
+class opencl_to_gl_context
+{
+private:
+	cl_context context;
+	
+
+public:
+
+	opencl_to_gl_context()
+	{
+		/*cl_context_properties properties[] = { CL_GL_CONTEXT_KHR, (cl_context_properties) glXGetCurrentContext(),
+												 CL_GLX_DISPLAY_KHR, (cl_context_properties) glXGetCurrentDisplay(), 0};*/
+		//context = clCreateContextFromType(properties,CL_DEVICE_TYPE_ALL, NULL, NULL, &err);
+		
+	}
 };
 
 int main(int argc, char* argv[])
