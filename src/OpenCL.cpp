@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <fstream>
 #include <iostream>
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/core/core_c.h>
+#include <opencv2/highgui/highgui_c.h>
 //#include "LinkedList.h"
 
 static void check_error(cl_int error, char* name)
@@ -119,10 +119,12 @@ int main(int argc, char* argv[])
 	err = clEnqueueReadImage( command_queue, mobj_B, CL_TRUE, Origin, Size3d,0,0, output, 0, NULL, NULL );
 	check_error( err, (char*) "clEnqueueReadImage" );
 	
-	cv::Mat img_output = cv::Mat(img->height,img->widthStep,CV_8U,output);
-	cv::namedWindow("teste");
-	cv::imshow("teste",img_output);
-	cv::waitKey(5000);
+	IplImage *img_output = cvCreateImage(cvSize(img->widthStep, img->height), IPL_DEPTH_8U, 1);
+	
+	img_output->imageData = (char*) output;
+	cvShowImage("saida",img_output);
+
+	cvWaitKey(1000);
 
 	err = clFlush( command_queue );
 	check_error(err, (char*) "clFlush command_queue");
