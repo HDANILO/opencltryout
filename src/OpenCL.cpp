@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <fstream>
 #include <iostream>
-#include <opencv2/core/core.h>
-#include <opencv2/highgui/highgui.h>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
 //#include "LinkedList.h"
 
 static void check_error(cl_int error, char* name)
