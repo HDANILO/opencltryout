@@ -1,12 +1,7 @@
-#include <CL/cl.h>
-#include <stdio.h>
-#include <fstream>
-#include <iostream>
-#include <opencv2/core/core_c.h>
-#include <opencv2/highgui/highgui_c.h>
+#include "OpenCL.h"
 //#include "LinkedList.h"
 
-static void check_error(cl_int error, char* name)
+void check_error(cl_int error, char* name)
 {
 	if (error != CL_SUCCESS)
 	{
@@ -16,26 +11,14 @@ static void check_error(cl_int error, char* name)
 	}
 }
 
-
-int main(int argc, char* argv[])
+void init_OpenCL(VisionCL* cl)
 {
-
 	cl_int err;
 	cl_uint num_platforms, num_devices;
-
-	char* image_path = "../Images/lena.jpg";
-	IplImage* img = cvLoadImage(image_path,0);
-	if (img == NULL)
-	{
-		std::string str("cvLoadImage/File not found: ");
-		str.append(image_path);
-		check_error(-1,(char*) str.c_str());
-	}
-
 	err = clGetPlatformIDs(0, NULL, &num_platforms);
 	check_error(err, (char*) "clGetPlatformIDs get number of platforms");
-	cl_platform_id* platforms_id = (cl_platform_id*)malloc(sizeof(cl_platform_id)*num_platforms);
-	err = clGetPlatformIDs(num_platforms,platforms_id,NULL);
+	cl->platformId = (cl_platform_id*)malloc(sizeof(cl_platform_id)*num_platforms);
+	err = clGetPlatformIDs(num_platforms,cl->platformId,NULL);
 	check_error(err, (char*) "clGetPlatformIDs get platforms id");	
 
 	if (num_platforms == 0)
@@ -45,21 +28,59 @@ int main(int argc, char* argv[])
 	else
 		printf("found 1 platform for opencl\n\n");
 
-	err = clGetDeviceIDs(platforms_id[0],CL_DEVICE_TYPE_GPU,0,NULL,&num_devices);
+	err = clGetDeviceIDs(*cl->platformId,CL_DEVICE_TYPE_GPU,0,NULL,&num_devices);
 	check_error(err, (char*) "clGetDeviceIDs get number of devices");
-	cl_device_id* devices_id = (cl_device_id*)malloc(sizeof(cl_device_id)*num_devices);
-	err = clGetDeviceIDs(platforms_id[0],CL_DEVICE_TYPE_GPU,num_devices,devices_id,NULL);
+	cl->deviceId = (cl_device_id*)malloc(sizeof(cl_device_id)*num_devices);
+	err = clGetDeviceIDs(*cl->platformId,CL_DEVICE_TYPE_GPU,num_devices,cl->deviceId,NULL);
 	check_error(err, (char*) "clGetDeviceIDs get devices id");
 
-	//cl_context_properties context_props[] = {CL_CONTEXT_PLATFORM,(cl_context_properties)platforms_id[0]};
-	//cl_context context = clCreateContextFromType(context_props,CL_DEVICE_TYPE_ALL,NULL, NULL, &err );
-	cl_context context = clCreateContext(NULL,1,&devices_id[0],NULL, NULL, &err );
+	cl->context = clCreateContext(NULL,1,cl->deviceId,NULL, NULL, &err );
 	check_error(err, (char*) "clCreateContext GPU");
 
-	cl_command_queue command_queue = NULL;
-	command_queue = clCreateCommandQueue( context, devices_id[0], 0, &err );
+	cl->commandQueue = clCreateCommandQueue( cl->context, *cl->deviceId, 0, &err );
 	check_error( err, (char*) "clCreateCommandQueue" );
 
+}
+
+void flush_OpenCL(VisionCL* cl)
+{
+	cl_int err;
+	err = clFlush( cl->commandQueue );
+	check_error(err, (char*) "clFlush command_queue");
+	err = clFinish( cl->commandQueue );
+	check_error(err, (char*) "clFinish command_queue");
+	err = clReleaseCommandQueue( cl->commandQueue );
+	check_error(err, (char*) "clReleaseCommandQueue command_queue");
+	err = clReleaseContext( cl->context );
+	check_error(err, (char*) "clReleaseContext context");
+
+}
+
+void debugBuildProgram(cl_int err, cl_program program, cl_device_id device)
+{
+	if (err != CL_SUCCESS)
+	{
+		printf("Error building program\n");
+
+		char buffer[4096];
+		size_t length;
+		clGetProgramBuildInfo(
+			program, // valid program object
+			device, // valid device_id that executable was built
+			CL_PROGRAM_BUILD_LOG, // indicate to retrieve build log
+			sizeof(buffer), // size of the buffer to write log to
+			buffer, // the actual buffer to write log to
+			&length // the actual size in bytes of data copied to buffer
+		);
+		printf("%s\n",buffer);
+		system("pause");
+		exit(1);
+	}
+}
+
+void OpenCLInvert(IplImage* src, IplImage* dst, VisionCL cl)
+{
+	cl_int err;
 	cl_mem mobj_A = NULL;
 	cl_image_format format;
 	
@@ -67,12 +88,11 @@ int main(int argc, char* argv[])
 	format.image_channel_data_type = CL_UNORM_INT8;
 
 	size_t Origin[3] = { 0,0,0};
-	size_t Size3d[3] = { img->width,img->height,1 };
+	size_t Size3d[3] = { src->width,src->height,1 };
 
-	printf("width: %d height; %d\n",img->widthStep,img->height);
-	mobj_A = clCreateImage2D( context, CL_MEM_READ_ONLY, &format,img->widthStep,img->height,NULL, NULL, &err );
+	mobj_A = clCreateImage2D( cl.context, CL_MEM_READ_ONLY, &format,src->widthStep,src->height,NULL, NULL, &err );
 	check_error( err, (char*) "clCreateImage2D in" );
-	err = clEnqueueWriteImage( command_queue, mobj_A, CL_TRUE, Origin, Size3d,0,0, img->imageData, 0, NULL, NULL );
+	err = clEnqueueWriteImage( cl.commandQueue, mobj_A, CL_TRUE, Origin, Size3d,0,0, src->imageData, 0, NULL, NULL );
     check_error( err, (char*) "clEnqueueWriteImage" );
 
 	cl_mem mobj_B = NULL;
@@ -80,7 +100,7 @@ int main(int argc, char* argv[])
 
 	formatB.image_channel_data_type = CL_UNORM_INT8;
 	formatB.image_channel_order = CL_A;
-	mobj_B = clCreateImage2D( context, CL_MEM_WRITE_ONLY, &formatB,img->widthStep,img->height,NULL, NULL, &err );
+	mobj_B = clCreateImage2D( cl.context, CL_MEM_WRITE_ONLY, &formatB,src->widthStep,src->height,NULL, NULL, &err );
 	check_error( err, (char*) "clCreateImage2D out" );
 
 	char* file_path = "CL/vglInvert.cl";
@@ -93,43 +113,37 @@ int main(int argc, char* argv[])
 	}
 	std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
 	const char *source_str = prog.c_str();
+#ifdef __DEBUG__
     printf("Kernel to be compiled:\n%s\n", source_str);
+#endif
 
 	cl_program program = NULL;
-	program = clCreateProgramWithSource( context, 1, (const char **) &source_str, 0, &err );
+	program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
 	check_error( err, (char*) "clCreateProgramWithSource" );
 
-	err = clBuildProgram( program, 1, &devices_id[0], NULL, NULL, NULL );
-	check_error( err, (char*) "clBuildProgram" );
+	err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
+	debugBuildProgram(err,program,*cl.deviceId);
+	
 
 	cl_kernel kernel = NULL;
 	kernel = clCreateKernel( program, "invert", &err ); 
 	check_error( err, (char*) "clCreateKernel" );
 
 	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &mobj_A );
-	check_error( err, (char*) "clSetKernelArg" );
+	check_error( err, (char*) "clSetKernelArg A" );
 	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &mobj_B );
-	check_error( err, (char*) "clSetKernelArg" );
+	check_error( err, (char*) "clSetKernelArg B" );
 
-	size_t worksize[] = { img->widthStep, img->height, 1 };
-	clEnqueueNDRangeKernel( command_queue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
+	size_t worksize[] = { src->widthStep, src->height, 1 };
+	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
 	check_error( err, (char*) "clEnqueueNDRangeKernel" );
 
-	uchar* output = (uchar*)malloc(img->widthStep*img->height*img->nChannels);
-	err = clEnqueueReadImage( command_queue, mobj_B, CL_TRUE, Origin, Size3d,0,0, output, 0, NULL, NULL );
+	uchar* auxdst = (uchar*)malloc(src->widthStep*src->height*src->nChannels);
+	err = clEnqueueReadImage( cl.commandQueue, mobj_B, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
 	check_error( err, (char*) "clEnqueueReadImage" );
 	
-	IplImage *img_output = cvCreateImage(cvSize(img->widthStep, img->height), IPL_DEPTH_8U, 1);
-	
-	img_output->imageData = (char*) output;
-	cvShowImage("saida",img_output);
+	dst->imageData = (char*) auxdst;
 
-	cvWaitKey(1000);
-
-	err = clFlush( command_queue );
-	check_error(err, (char*) "clFlush command_queue");
-	err = clFinish( command_queue );
-	check_error(err, (char*) "clFinish command_queue");
 	err = clReleaseKernel( kernel );
 	check_error(err, (char*) "clReleaseKernel kernel");
 	err = clReleaseProgram( program );
@@ -137,15 +151,96 @@ int main(int argc, char* argv[])
 	err = clReleaseMemObject( mobj_A );
 	check_error(err, (char*) "clReleaseMemObject mobj_A");
 	err = clReleaseMemObject( mobj_B );
-	check_error(err, (char*) "clReleaseMemObject mobj_A");
-	err = clReleaseCommandQueue( command_queue );
-	check_error(err, (char*) "clReleaseCommandQueue command_queue");
-	err = clReleaseContext( context );
-	check_error(err, (char*) "clReleaseContext context");
+	check_error(err, (char*) "clReleaseMemObject mobj_B");
 
-	free(output);
-	free(platforms_id);
-	system("pause");
-	return 0;
+}
+
+void OpenCLThreshold(IplImage* src, IplImage* dst, float thresh, VisionCL cl)
+{
+	cl_int err;
+	cl_mem mobj_A = NULL;
+	cl_image_format format;
+	
+	format.image_channel_order = CL_A;
+	format.image_channel_data_type = CL_UNORM_INT8;
+
+	size_t Origin[3] = { 0,0,0};
+	size_t Size3d[3] = { src->width,src->height,1 };
+
+	mobj_A = clCreateImage2D( cl.context, CL_MEM_READ_ONLY, &format,src->widthStep,src->height,NULL, NULL, &err );
+	check_error( err, (char*) "clCreateImage2D in" );
+	err = clEnqueueWriteImage( cl.commandQueue, mobj_A, CL_TRUE, Origin, Size3d,0,0, src->imageData, 0, NULL, NULL );
+    check_error( err, (char*) "clEnqueueWriteImage" );
+
+	cl_mem mobj_B = NULL;
+	cl_image_format formatB;
+
+	formatB.image_channel_data_type = CL_UNORM_INT8;
+	formatB.image_channel_order = CL_A;
+	mobj_B = clCreateImage2D( cl.context, CL_MEM_WRITE_ONLY, &formatB,src->widthStep,src->height,NULL, NULL, &err );
+	check_error( err, (char*) "clCreateImage2D out" );
+
+	cl_mem mobj_C = NULL;
+	mobj_C = clCreateBuffer(cl.context,CL_MEM_READ_ONLY,sizeof(thresh),NULL,&err);
+	check_error( err, (char*) "clCreateBuffer thresh" );
+	err = clEnqueueWriteBuffer(cl.commandQueue,mobj_C,CL_TRUE,NULL,sizeof(thresh),&thresh,NULL,NULL,NULL);
+	check_error( err, (char*) "clEnqueueWriteBuffer thresh" );
+
+	char* file_path = "CL/vglThreshold.cl";
+	std::ifstream file(file_path);
+	if(file.fail())
+	{
+		std::string str("File not found: ");
+		str.append(file_path);
+		check_error(-1,(char*)str.c_str());
+	}
+	std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
+	const char *source_str = prog.c_str();
+#ifdef __DEBUG__
+    printf("Kernel to be compiled:\n%s\n", source_str);
+#endif
+
+	cl_program program = NULL;
+	program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
+	check_error( err, (char*) "clCreateProgramWithSource" );
+
+	err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
+	debugBuildProgram(err,program,*cl.deviceId);
+
+	cl_kernel kernel = NULL;
+	kernel = clCreateKernel( program, "threshold", &err ); 
+	check_error( err, (char*) "clCreateKernel" );
+
+	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &mobj_A );
+	check_error( err, (char*) "clSetKernelArg A" );
+	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &mobj_B );
+	check_error( err, (char*) "clSetKernelArg B" );
+	err = clSetKernelArg( kernel, 2, sizeof( cl_mem ), (float *) &mobj_C );
+	check_error( err, (char*) "clSetKernelArg C" );
+
+	size_t worksize[] = { src->widthStep, src->height, 1 };
+	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
+	check_error( err, (char*) "clEnqueueNDRangeKernel" );
+
+	uchar* auxdst = (uchar*)malloc(src->widthStep*src->height*src->nChannels);
+	err = clEnqueueReadImage( cl.commandQueue, mobj_B, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
+	check_error( err, (char*) "clEnqueueReadImage" );
+
+	float t;
+	err = clEnqueueReadBuffer( cl.commandQueue, mobj_C, CL_TRUE,NULL ,sizeof(float),&t, NULL, NULL, NULL );
+	check_error( err, (char*) "clEnqueueReadImage" );
+	
+	dst->imageData = (char*) auxdst;
+
+	err = clReleaseKernel( kernel );
+	check_error(err, (char*) "clReleaseKernel kernel");
+	err = clReleaseProgram( program );
+	check_error(err, (char*) "clReleaseProgram program");
+	err = clReleaseMemObject( mobj_A );
+	check_error(err, (char*) "clReleaseMemObject mobj_A");
+	err = clReleaseMemObject( mobj_B );
+	check_error(err, (char*) "clReleaseMemObject mobj_B");
+	err = clReleaseMemObject( mobj_C );
+	check_error(err, (char*) "clReleaseMemObject mobj_C");
 }
 
