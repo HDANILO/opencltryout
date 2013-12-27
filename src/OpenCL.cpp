@@ -225,10 +225,6 @@ void OpenCLThreshold(IplImage* src, IplImage* dst, float thresh, VisionCL cl)
 	uchar* auxdst = (uchar*)malloc(src->widthStep*src->height*src->nChannels);
 	err = clEnqueueReadImage( cl.commandQueue, mobj_B, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
 	check_error( err, (char*) "clEnqueueReadImage" );
-
-	float t;
-	err = clEnqueueReadBuffer( cl.commandQueue, mobj_C, CL_TRUE,NULL ,sizeof(float),&t, NULL, NULL, NULL );
-	check_error( err, (char*) "clEnqueueReadImage" );
 	
 	dst->imageData = (char*) auxdst;
 
