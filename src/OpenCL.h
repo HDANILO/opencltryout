@@ -19,3 +19,4 @@ void flush_OpenCL(VisionCL* cl);
 void debugBuildProgram(cl_int err, cl_program program, cl_device_id device);
 void OpenCLInvert(IplImage* src, IplImage* dst, VisionCL cl);
 void OpenCLThreshold(IplImage* src, IplImage* dst, float thresh, VisionCL cl);
+void OpenCLConvolution(IplImage* src, IplImage* dst, float* convolution_window, int window_size_x, int window_size_y, VisionCL cl);

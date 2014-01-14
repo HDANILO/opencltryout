@@ -15,11 +15,15 @@ int main()
 	}
 
 	IplImage* out = cvCreateImage(cvSize(img->widthStep, img->height), IPL_DEPTH_8U, 1);;
-	OpenCLThreshold(img,out,0.5f,cl);
-	OpenCLInvert(out,out,cl);
+	float convolution[3][3] = { {1.0f/13.0f,2.0f/13.0f,1.0f/13.0f},{2.0f/13.0f,1.0f/13.0f,2.0f/13.0f},{1.0f/13.0f,2.0f/13.0f,1.0f/13.0f} }; //Operador blur
 
-	cvShowImage("saida",out);
-	cvWaitKey(5000);
+	//aplica várias vezes pro resultado ser evidente
+	OpenCLConvolution(img,out,*convolution,3,3,cl);
+	OpenCLConvolution(out,out,*convolution,3,3,cl);
+	OpenCLConvolution(out,out,*convolution,3,3,cl);
+	OpenCLConvolution(out,out,*convolution,3,3,cl);
+	OpenCLConvolution(out,out,*convolution,3,3,cl);
+	cvSaveImage("lenaout.png",out);
 
 	flush_OpenCL(&cl);
 	system("pause");
