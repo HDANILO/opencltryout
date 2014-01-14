@@ -242,10 +242,6 @@ void OpenCLThreshold(IplImage* src, IplImage* dst, float thresh, VisionCL cl)
 
 void OpenCLConvolution(IplImage* src, IplImage* dst, float* convolution_window, int window_size_x, int window_size_y, VisionCL cl)
 {
-
-	for(int i = 0; i < window_size_x; i++)
-		for(int j = 0; j < window_size_y; j++)
-			printf("teste i=%d j=%d value=%.2f\n",i,j,convolution_window[i+j]);
 	cl_int err;
 	cl_mem mobj_A = NULL;
 	cl_image_format format;
