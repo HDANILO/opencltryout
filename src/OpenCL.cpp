@@ -11,7 +11,7 @@ void check_error(cl_int error, char* name)
 	}
 }
 
-void init_OpenCL(VisionCL* cl)
+void init_OpenCL(VisionCL* cl, int window)
 {
 	cl_int err;
 	cl_uint num_platforms, num_devices;
@@ -33,7 +33,8 @@ void init_OpenCL(VisionCL* cl)
 	cl->deviceId = (cl_device_id*)malloc(sizeof(cl_device_id)*num_devices);
 	err = clGetDeviceIDs(*cl->platformId,CL_DEVICE_TYPE_GPU,num_devices,cl->deviceId,NULL);
 	check_error(err, (char*) "clGetDeviceIDs get devices id");
-
+	//precisa adicionar a propriedade CL_KHR_gl_sharing no contexto e pra isso precisará do id do contexto do GL que deverá ser o parametro window
+	//cl_context_properties props[] =	{CL_GL_CONTEXT_KHR, (cl_context_properties) wglGetCurrentContext()};
 	cl->context = clCreateContext(NULL,1,cl->deviceId,NULL, NULL, &err );
 	check_error(err, (char*) "clCreateContext GPU");
 
@@ -78,107 +79,184 @@ void debugBuildProgram(cl_int err, cl_program program, cl_device_id device)
 	}
 }
 
-void OpenCLInvert(IplImage* src, IplImage* dst, VisionCL cl)
+void vglCLUpload(VglImage* src,VisionCL cl)
 {
-	cl_int err;
-	cl_mem mobj_A = NULL;
-	cl_image_format format;
-	
-	format.image_channel_order = CL_A;
-	format.image_channel_data_type = CL_UNORM_INT8;
-
-	size_t Origin[3] = { 0,0,0};
-	size_t Size3d[3] = { src->width,src->height,1 };
-
-	mobj_A = clCreateImage2D( cl.context, CL_MEM_READ_ONLY, &format,src->widthStep,src->height,NULL, NULL, &err );
-	check_error( err, (char*) "clCreateImage2D in" );
-	err = clEnqueueWriteImage( cl.commandQueue, mobj_A, CL_TRUE, Origin, Size3d,0,0, src->imageData, 0, NULL, NULL );
-    check_error( err, (char*) "clEnqueueWriteImage" );
-
-	cl_mem mobj_B = NULL;
-	cl_image_format formatB;
-
-	formatB.image_channel_data_type = CL_UNORM_INT8;
-	formatB.image_channel_order = CL_A;
-	mobj_B = clCreateImage2D( cl.context, CL_MEM_WRITE_ONLY, &formatB,src->widthStep,src->height,NULL, NULL, &err );
-	check_error( err, (char*) "clCreateImage2D out" );
-
-	char* file_path = "CL/vglInvert.cl";
-	std::ifstream file(file_path);
-	if(file.fail())
-	{
-		std::string str("File not found: ");
-		str.append(file_path);
-		check_error(-1,(char*)str.c_str());
-	}
-	std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
-	const char *source_str = prog.c_str();
-#ifdef __DEBUG__
-    printf("Kernel to be compiled:\n%s\n", source_str);
-#endif
-
-	cl_program program = NULL;
-	program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
-	check_error( err, (char*) "clCreateProgramWithSource" );
-
-	err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
-	debugBuildProgram(err,program,*cl.deviceId);
-	
-
-	cl_kernel kernel = NULL;
-	kernel = clCreateKernel( program, "invert", &err ); 
-	check_error( err, (char*) "clCreateKernel" );
-
-	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &mobj_A );
-	check_error( err, (char*) "clSetKernelArg A" );
-	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &mobj_B );
-	check_error( err, (char*) "clSetKernelArg B" );
-
-	size_t worksize[] = { src->widthStep, src->height, 1 };
-	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
-	check_error( err, (char*) "clEnqueueNDRangeKernel" );
-
-	uchar* auxdst = (uchar*)malloc(src->widthStep*src->height*src->nChannels);
-	err = clEnqueueReadImage( cl.commandQueue, mobj_B, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
-	check_error( err, (char*) "clEnqueueReadImage" );
-	
-	dst->imageData = (char*) auxdst;
-
-	err = clReleaseKernel( kernel );
-	check_error(err, (char*) "clReleaseKernel kernel");
-	err = clReleaseProgram( program );
-	check_error(err, (char*) "clReleaseProgram program");
-	err = clReleaseMemObject( mobj_A );
-	check_error(err, (char*) "clReleaseMemObject mobj_A");
-	err = clReleaseMemObject( mobj_B );
-	check_error(err, (char*) "clReleaseMemObject mobj_B");
-
+	vglCLUpload(src,cl,false);
 }
 
-void OpenCLThreshold(IplImage* src, IplImage* dst, float thresh, VisionCL cl)
+void vglCLUpload(VglImage* src,VisionCL cl, bool force_copy)
+{
+	if (src->oclPtr == NULL || force_copy)
+	{
+		/*if (src->fbo != -1)
+		{
+			src->oclPtr = clCreateFromGLTexture2D(cl.context,CL_MEM_READ_WRITE,GL_TEXTURE_2D,0,src->fbo,&err);
+			check_error( err, (char*) "clCreateFromGlTexture2D interop" );
+			clEnqueueAcquireGLObjects(cl.commandQueue, 1, &src->oclPtr, 0,0,0);
+		}
+		else
+		{*/
+
+			cl_int err;
+			cl_image_format format;
+			if (src->nChannels == 1)
+			{
+				format.image_channel_order = CL_R;
+				format.image_channel_data_type = CL_UNORM_INT8;
+			}
+			else
+			{
+				format.image_channel_order = CL_RGBA;
+				format.image_channel_data_type = CL_UNORM_INT8;
+			}
+
+			src->oclPtr = clCreateImage2D(cl.context,CL_MEM_READ_WRITE, &format, src->width, src->height, NULL, NULL, &err);
+			check_error( err, (char*) "clCreateImage2D" );
+
+			size_t Origin[3] = { 0,0,0};
+			size_t Size3d[3] = { src->width,src->height,1 };
+
+			err = clEnqueueWriteImage( cl.commandQueue, src->oclPtr, CL_TRUE, Origin, Size3d,0,0, src->iplRGBA->imageData, 0, NULL, NULL );
+			check_error( err, (char*) "clEnqueueWriteImage" );
+		//}
+	}
+}
+
+void vglDownloadCLtoRam(VglImage* img, VisionCL cl)
+{
+	
+	size_t Origin[3] = { 0,0,0};
+	size_t Size3d[3] = { img->width,img->height,1 };
+
+	uchar* auxdst = (uchar*)malloc(img->width*img->height*4);
+	cl_int err_cl = clEnqueueReadImage( cl.commandQueue, img->oclPtr, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
+	check_error( err_cl, (char*) "clEnqueueReadImage" );
+
+	img->iplRGBA->imageData = (char*) auxdst;
+	cvCvtColor(img->iplRGBA,img->ipl,CV_RGBA2BGR);
+}
+
+void OpenCLCopy(VglImage* src, VglImage* dst, VisionCL cl)
+{
+	OpenCLCopy(src,dst,cl,true);
+}
+void OpenCLInvert(VglImage* src, VglImage* dst, VisionCL cl)
+{
+	OpenCLInvert(src,dst,cl,true);
+}
+void OpenCLThreshold(VglImage* src, VglImage* dst, float thresh, VisionCL cl)
+{
+	OpenCLThreshold(src,dst,thresh,cl,true);
+}
+void OpenCLConvolution(VglImage* src, VglImage* dst, float* convolution_window, int window_size_x, int window_size_y, VisionCL cl)
+{
+	OpenCLConvolution(src,dst,convolution_window,window_size_x,window_size_y,cl,true);
+}
+
+void OpenCLCopy(VglImage* src, VglImage* dst, VisionCL cl, bool copyToRam)
 {
 	cl_int err;
-	cl_mem mobj_A = NULL;
-	cl_image_format format;
+
+	vglCLUpload(src,cl);
+	vglCLUpload(dst,cl);
+
+	static cl_program program = NULL;
+	if (program == NULL){
+		char* file_path = "CL/vglCopy.cl";
+		std::ifstream file(file_path);
+		if(file.fail())
+		{
+			std::string str("File not found: ");
+			str.append(file_path);
+			check_error(-1,(char*)str.c_str());
+		}
+		std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
+		const char *source_str = prog.c_str();
+#ifdef __DEBUG__
+		printf("Kernel to be compiled:\n%s\n", source_str);
+#endif
+
+		program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
+		check_error( err, (char*) "clCreateProgramWithSource" );
+		
+		err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
+		debugBuildProgram(err,program,*cl.deviceId);
+	}
+
+	static cl_kernel kernel = NULL;
+	if (kernel == NULL)
+	{
+		kernel = clCreateKernel( program, "copy", &err ); 
+		check_error( err, (char*) "clCreateKernel" );
+	}
+
+	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &src->oclPtr );
+	check_error( err, (char*) "clSetKernelArg A" );
+	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &dst->oclPtr );
+	check_error( err, (char*) "clSetKernelArg B" );
+
+	size_t worksize[] = { src->width, src->height, 1 };
+	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
+	check_error( err, (char*) "clEnqueueNDRangeKernel" );
 	
-	format.image_channel_order = CL_A;
-	format.image_channel_data_type = CL_UNORM_INT8;
+	if (copyToRam)
+		vglDownloadCLtoRam(dst,cl);
+}
+void OpenCLInvert(VglImage* src, VglImage* dst, VisionCL cl, bool copyToRam)
+{
+	cl_int err;
+	
+	vglCLUpload(src,cl);
+	vglCLUpload(dst,cl);
 
-	size_t Origin[3] = { 0,0,0};
-	size_t Size3d[3] = { src->width,src->height,1 };
+	static cl_program program = NULL;
+	if (program == NULL){
+		char* file_path = "CL/vglInvert.cl";
+		std::ifstream file(file_path);
+		if(file.fail())
+		{
+			std::string str("File not found: ");
+			str.append(file_path);
+			check_error(-1,(char*)str.c_str());
+		}
+		std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
+		const char *source_str = prog.c_str();
+#ifdef __DEBUG__
+		printf("Kernel to be compiled:\n%s\n", source_str);
+#endif
 
-	mobj_A = clCreateImage2D( cl.context, CL_MEM_READ_ONLY, &format,src->widthStep,src->height,NULL, NULL, &err );
-	check_error( err, (char*) "clCreateImage2D in" );
-	err = clEnqueueWriteImage( cl.commandQueue, mobj_A, CL_TRUE, Origin, Size3d,0,0, src->imageData, 0, NULL, NULL );
-    check_error( err, (char*) "clEnqueueWriteImage" );
+		program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
+		check_error( err, (char*) "clCreateProgramWithSource" );
+		
+		err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
+		debugBuildProgram(err,program,*cl.deviceId);
+	}
 
-	cl_mem mobj_B = NULL;
-	cl_image_format formatB;
+	static cl_kernel kernel = NULL;
+	if (kernel == NULL)
+	{
+		kernel = clCreateKernel( program, "invert", &err ); 
+		check_error( err, (char*) "clCreateKernel" );
+	}
 
-	formatB.image_channel_data_type = CL_UNORM_INT8;
-	formatB.image_channel_order = CL_A;
-	mobj_B = clCreateImage2D( cl.context, CL_MEM_WRITE_ONLY, &formatB,src->widthStep,src->height,NULL, NULL, &err );
-	check_error( err, (char*) "clCreateImage2D out" );
+	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &src->oclPtr );
+	check_error( err, (char*) "clSetKernelArg A" );
+	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &dst->oclPtr );
+	check_error( err, (char*) "clSetKernelArg B" );
+
+	size_t worksize[] = { src->width, src->height, 1 };
+	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
+	check_error( err, (char*) "clEnqueueNDRangeKernel" );
+	
+	if (copyToRam)
+		vglDownloadCLtoRam(dst,cl);
+}
+void OpenCLThreshold(VglImage* src, VglImage* dst, float thresh, VisionCL cl, bool copyToRam)
+{
+	cl_int err;
+	
+	vglCLUpload(src,cl);
+	vglCLUpload(dst,cl);
 
 	cl_mem mobj_C = NULL;
 	mobj_C = clCreateBuffer(cl.context,CL_MEM_READ_ONLY,sizeof(thresh),NULL,&err);
@@ -186,84 +264,59 @@ void OpenCLThreshold(IplImage* src, IplImage* dst, float thresh, VisionCL cl)
 	err = clEnqueueWriteBuffer(cl.commandQueue,mobj_C,CL_TRUE,NULL,sizeof(thresh),&thresh,NULL,NULL,NULL);
 	check_error( err, (char*) "clEnqueueWriteBuffer thresh" );
 
-	char* file_path = "CL/vglThreshold.cl";
-	std::ifstream file(file_path);
-	if(file.fail())
+	static cl_program program = NULL;
+	if (program == NULL)
 	{
-		std::string str("File not found: ");
-		str.append(file_path);
-		check_error(-1,(char*)str.c_str());
-	}
-	std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
-	const char *source_str = prog.c_str();
+		char* file_path = "CL/vglThreshold.cl";
+		std::ifstream file(file_path);
+		if(file.fail())
+		{
+			std::string str("File not found: ");
+			str.append(file_path);
+			check_error(-1,(char*)str.c_str());
+		}
+		std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
+		const char *source_str = prog.c_str();
 #ifdef __DEBUG__
-    printf("Kernel to be compiled:\n%s\n", source_str);
+		printf("Kernel to be compiled:\n%s\n", source_str);
 #endif
+		program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
+		check_error( err, (char*) "clCreateProgramWithSource" );
 
-	cl_program program = NULL;
-	program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
-	check_error( err, (char*) "clCreateProgramWithSource" );
+		err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
+		debugBuildProgram(err,program,*cl.deviceId);
+	}
+	
+	static cl_kernel kernel = NULL;
+	if (kernel == NULL)
+	{
+		kernel = clCreateKernel( program, "threshold", &err ); 
+		check_error( err, (char*) "clCreateKernel" );
+	}
 
-	err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
-	debugBuildProgram(err,program,*cl.deviceId);
-
-	cl_kernel kernel = NULL;
-	kernel = clCreateKernel( program, "threshold", &err ); 
-	check_error( err, (char*) "clCreateKernel" );
-
-	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &mobj_A );
+	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &src->oclPtr );
 	check_error( err, (char*) "clSetKernelArg A" );
-	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &mobj_B );
+	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &dst->oclPtr );
 	check_error( err, (char*) "clSetKernelArg B" );
 	err = clSetKernelArg( kernel, 2, sizeof( cl_mem ), (float *) &mobj_C );
 	check_error( err, (char*) "clSetKernelArg C" );
 
-	size_t worksize[] = { src->widthStep, src->height, 1 };
+	size_t worksize[] = { src->width, src->height, 1 };
 	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
 	check_error( err, (char*) "clEnqueueNDRangeKernel" );
 
-	uchar* auxdst = (uchar*)malloc(src->widthStep*src->height*src->nChannels);
-	err = clEnqueueReadImage( cl.commandQueue, mobj_B, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
-	check_error( err, (char*) "clEnqueueReadImage" );
-	
-	dst->imageData = (char*) auxdst;
+	if (copyToRam)
+		vglDownloadCLtoRam(dst,cl);
 
-	err = clReleaseKernel( kernel );
-	check_error(err, (char*) "clReleaseKernel kernel");
-	err = clReleaseProgram( program );
-	check_error(err, (char*) "clReleaseProgram program");
-	err = clReleaseMemObject( mobj_A );
-	check_error(err, (char*) "clReleaseMemObject mobj_A");
-	err = clReleaseMemObject( mobj_B );
-	check_error(err, (char*) "clReleaseMemObject mobj_B");
 	err = clReleaseMemObject( mobj_C );
 	check_error(err, (char*) "clReleaseMemObject mobj_C");
 }
-
-void OpenCLConvolution(IplImage* src, IplImage* dst, float* convolution_window, int window_size_x, int window_size_y, VisionCL cl)
+void OpenCLConvolution(VglImage* src, VglImage* dst, float* convolution_window, int window_size_x, int window_size_y, VisionCL cl,bool copyToRam)
 {
 	cl_int err;
-	cl_mem mobj_A = NULL;
-	cl_image_format format;
 	
-	format.image_channel_order = CL_A;
-	format.image_channel_data_type = CL_UNORM_INT8;
-
-	size_t Origin[3] = { 0,0,0};
-	size_t Size3d[3] = { src->width,src->height,1 };
-
-	mobj_A = clCreateImage2D( cl.context, CL_MEM_READ_ONLY, &format,src->widthStep,src->height,NULL, NULL, &err );
-	check_error( err, (char*) "clCreateImage2D in" );
-	err = clEnqueueWriteImage( cl.commandQueue, mobj_A, CL_TRUE, Origin, Size3d,0,0, src->imageData, 0, NULL, NULL );
-    check_error( err, (char*) "clEnqueueWriteImage" );
-
-	cl_mem mobj_B = NULL;
-	cl_image_format formatB;
-
-	formatB.image_channel_data_type = CL_UNORM_INT8;
-	formatB.image_channel_order = CL_A;
-	mobj_B = clCreateImage2D( cl.context, CL_MEM_WRITE_ONLY, &formatB,src->widthStep,src->height,NULL, NULL, &err );
-	check_error( err, (char*) "clCreateImage2D out" );
+	vglCLUpload(src,cl);
+	vglCLUpload(dst,cl);
 
 	cl_mem mobj_C = NULL;
 	mobj_C = clCreateBuffer(cl.context,CL_MEM_READ_ONLY,window_size_x*window_size_y*sizeof(float),NULL,&err);
@@ -283,34 +336,40 @@ void OpenCLConvolution(IplImage* src, IplImage* dst, float* convolution_window, 
 	err = clEnqueueWriteBuffer(cl.commandQueue,mobj_E,CL_TRUE,NULL,sizeof(int),&window_size_y,NULL,NULL,NULL);
 	check_error( err, (char*) "clEnqueueWriteBuffer window_size_y" );
 
-	char* file_path = "CL/vglConvolution.cl";
-	std::ifstream file(file_path);
-	if(file.fail())
+	static cl_program program = NULL;
+	if (program == NULL)
 	{
-		std::string str("File not found: ");
-		str.append(file_path);
-		check_error(-1,(char*)str.c_str());
-	}
-	std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
-	const char *source_str = prog.c_str();
+		char* file_path = "CL/vglConvolution.cl";
+		std::ifstream file(file_path);
+		if(file.fail())
+		{
+			std::string str("File not found: ");
+			str.append(file_path);
+			check_error(-1,(char*)str.c_str());
+		}
+		std::string prog( std::istreambuf_iterator<char>( file ), ( std::istreambuf_iterator<char>() ) );
+		const char *source_str = prog.c_str();
 #ifdef __DEBUG__
-    printf("Kernel to be compiled:\n%s\n", source_str);
+		printf("Kernel to be compiled:\n%s\n", source_str);
 #endif
 
-	cl_program program = NULL;
-	program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
-	check_error( err, (char*) "clCreateProgramWithSource" );
+		program = clCreateProgramWithSource( cl.context, 1, (const char **) &source_str, 0, &err );
+		check_error( err, (char*) "clCreateProgramWithSource" );
 
-	err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
-	debugBuildProgram(err,program,*cl.deviceId);
+		err = clBuildProgram( program, 1, cl.deviceId, NULL, NULL, NULL );
+		debugBuildProgram(err,program,*cl.deviceId);
+	}
+	
+	static cl_kernel kernel = NULL;
+	if (kernel == NULL)
+	{
+		kernel = clCreateKernel( program, "convolution", &err ); 
+		check_error( err, (char*) "clCreateKernel" );
+	}
 
-	cl_kernel kernel = NULL;
-	kernel = clCreateKernel( program, "convolution", &err ); 
-	check_error( err, (char*) "clCreateKernel" );
-
-	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &mobj_A );
+	err = clSetKernelArg( kernel, 0, sizeof( cl_mem ), (void *) &src->oclPtr );
 	check_error( err, (char*) "clSetKernelArg A" );
-	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &mobj_B );
+	err = clSetKernelArg( kernel, 1, sizeof( cl_mem ), (void *) &dst->oclPtr );
 	check_error( err, (char*) "clSetKernelArg B" );
 	err = clSetKernelArg( kernel, 2, sizeof( cl_mem ), (float *) &mobj_C );
 	check_error( err, (char*) "clSetKernelArg C" );
@@ -319,24 +378,13 @@ void OpenCLConvolution(IplImage* src, IplImage* dst, float* convolution_window, 
 	err = clSetKernelArg( kernel, 4, sizeof( cl_mem ), (float *) &mobj_E );
 	check_error( err, (char*) "clSetKernelArg E" );
 
-	size_t worksize[] = { src->widthStep, src->height, 1 };
+	size_t worksize[] = { src->width, src->height, 1 };
 	clEnqueueNDRangeKernel( cl.commandQueue, kernel, 2, NULL, worksize, 0, 0, 0, 0 );
 	check_error( err, (char*) "clEnqueueNDRangeKernel" );
 
-	uchar* auxdst = (uchar*)malloc(src->widthStep*src->height*src->nChannels);
-	err = clEnqueueReadImage( cl.commandQueue, mobj_B, CL_TRUE, Origin, Size3d,0,0, auxdst, 0, NULL, NULL );
-	check_error( err, (char*) "clEnqueueReadImage" );
+	if (copyToRam)
+		vglDownloadCLtoRam(dst,cl);
 
-	dst->imageData = (char*) auxdst;
-
-	err = clReleaseKernel( kernel );
-	check_error(err, (char*) "clReleaseKernel kernel");
-	err = clReleaseProgram( program );
-	check_error(err, (char*) "clReleaseProgram program");
-	err = clReleaseMemObject( mobj_A );
-	check_error(err, (char*) "clReleaseMemObject mobj_A");
-	err = clReleaseMemObject( mobj_B );
-	check_error(err, (char*) "clReleaseMemObject mobj_B");
 	err = clReleaseMemObject( mobj_C );
 	check_error(err, (char*) "clReleaseMemObject mobj_C");
 	err = clReleaseMemObject( mobj_D );

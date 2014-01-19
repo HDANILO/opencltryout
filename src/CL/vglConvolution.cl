@@ -13,7 +13,7 @@ __kernel void convolution(__read_only image2d_t img_input,__write_only image2d_t
 		int xi = (i / *window_size_x) - factorx;
 		int yi = (i % *window_size_y) - factory;
 		float4 p = read_imagef(img_input, smp, (int2)(coords.x + xi,coords.y + yi));
-		p *= convolution_window[i];
+		p.xyz *= convolution_window[i];
 		result += p;
 	}
 	write_imagef(img_output,coords,result);
